@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import pytesseract
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog
 from PIL import Image, ImageTk, ImageDraw, ImageFont
 
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'  # Update this path if needed
@@ -44,6 +44,9 @@ class BrailleOCRApp:
 
         self.preview_button = tk.Button(btn_frame, text="Preview Braille Text", command=self.preview_braille_text)
         self.preview_button.pack(side="left", padx=5)
+
+        self.region_thresh_button = tk.Button(btn_frame, text="Set Region Threshold", command=self.set_region_threshold)
+        self.region_thresh_button.pack(side="left", padx=5)
 
         self.canvas.bind("<ButtonPress-1>", self.on_mouse_down)
         self.canvas.bind("<ButtonRelease-1>", self.on_mouse_up)
@@ -88,6 +91,22 @@ class BrailleOCRApp:
         self.canvas.create_image((screen_w - disp_img.shape[1]) // 2, (screen_h - disp_img.shape[0]) // 2,
                                  image=self.tk_img, anchor="nw", tags="img")
         self.canvas.config(scrollregion=self.canvas.bbox("all"))
+
+    def set_region_threshold(self):
+        if not selected_boxes:
+            messagebox.showinfo("Info", "No region selected. Draw a box first.")
+            return
+        # Use the last selected box
+        x1, y1, x2, y2 = selected_boxes[-1]
+        thresh_val = tk.simpledialog.askinteger("Region Threshold", "Enter threshold value (0-255):", minvalue=0, maxvalue=255)
+        if thresh_val is None:
+            return
+        # Apply threshold only to the selected region
+        region = self.gray_image[y1:y2, x1:x2]
+        _, region_thresh = cv2.threshold(region, thresh_val, 255, cv2.THRESH_BINARY)
+        # Update the binary image only in the region
+        self.binary_image[y1:y2, x1:x2] = region_thresh
+        self.show_image(self.binary_image)
 
     def on_mouse_down(self, event):
         global ix, iy, drawing
@@ -190,6 +209,7 @@ class BrailleOCRApp:
                     text = text_line[len("Text: "):]
                     # Get all lines after "Braille: ", including the first line after the prefix
                     braille_lines = [lines[braille_start][len("Braille: "):]] + lines[braille_start+1:]
+                    braille_lines = [line.strip() for line in braille_lines]
                     braille = "\n".join(braille_lines)
                     new_pairs.append((box, (text, braille)))
             # Overlay using the edited Braille text and the correct boxes
