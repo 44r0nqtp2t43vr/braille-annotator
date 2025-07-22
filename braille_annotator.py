@@ -142,7 +142,10 @@ class BrailleOCRApp:
                 continue  # Skip invalid regions
             text = pytesseract.image_to_string(roi, config="--psm 6").strip()
             print("OCR text:", repr(text))
-            braille = ''.join([char_to_braille(c) for c in text])
+            braille = '\n'.join(
+                ''.join([char_to_braille(c) for c in line])
+                for line in text.splitlines()
+            )
             braille_output.append((text, braille))
         return braille_output
 
@@ -152,33 +155,59 @@ class BrailleOCRApp:
             return
         text_pairs = self.extract_text_and_braille()
         print("Extracted text and braille:", text_pairs)
-        preview = "\n\n".join([f"Text: {t}\nBraille: {b}" for t, b in text_pairs])
+        preview = "\n\n".join([
+            f"Box: {box}\nText: {t}\nBraille: {b}"
+            for box, (t, b) in zip(selected_boxes, text_pairs)
+        ])
 
         preview_window = tk.Toplevel(self.root)
         preview_window.title("Braille Preview")
         preview_window.geometry("500x300")
 
-        # Add a frame for the button at the top
         btn_frame = tk.Frame(preview_window)
         btn_frame.pack(fill="x", pady=5, side="top")
-
-        def replace_with_braille():
-            self.overlay_braille_on_image(text_pairs)
-            preview_window.destroy()
-
-        replace_btn = tk.Button(btn_frame, text="Replace Box with Braille", command=replace_with_braille)
-        replace_btn.pack(pady=5)
 
         text_box = tk.Text(preview_window, wrap="word")
         text_box.insert("1.0", preview)
         text_box.pack(expand=True, fill="both")
+
+        def replace_with_braille():
+            edited = text_box.get("1.0", "end").strip()
+            blocks = [block.strip() for block in edited.split("\n\n") if block.strip()]
+            new_pairs = []
+            for block in blocks:
+                lines = block.splitlines()
+                box_line = next((line for line in lines if line.startswith("Box: ")), None)
+                text_line = next((line for line in lines if line.startswith("Text: ")), None)
+                braille_start = None
+                for idx, line in enumerate(lines):
+                    if line.startswith("Braille: "):
+                        braille_start = idx
+                        break
+                if box_line and text_line and braille_start is not None:
+                    box_str = box_line[len("Box: "):].strip()
+                    box = tuple(map(int, box_str.strip("()").split(",")))
+                    text = text_line[len("Text: "):]
+                    # Get all lines after "Braille: ", including the first line after the prefix
+                    braille_lines = [lines[braille_start][len("Braille: "):]] + lines[braille_start+1:]
+                    braille = "\n".join(braille_lines)
+                    new_pairs.append((box, (text, braille)))
+            # Overlay using the edited Braille text and the correct boxes
+            self.overlay_braille_on_image(new_pairs)
+            # Optionally, update selected_boxes to match the new set:
+            global selected_boxes
+            selected_boxes = [box for box, _ in new_pairs]
+            preview_window.destroy()
+
+        replace_btn = tk.Button(btn_frame, text="Replace Box with Braille", command=replace_with_braille)
+        replace_btn.pack(pady=5)
 
     def overlay_braille_on_image(self, text_pairs):
         img = self.binary_image.copy()
         img_rgb = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
         pil_img = Image.fromarray(img_rgb)
 
-        font_path = "DejaVuSans-Bold.ttf"  # Make sure this file exists in your project folder
+        font_path = "DejaVuSans-Bold.ttf"
         try:
             base_font = ImageFont.truetype(font_path, 40)
         except Exception as e:
@@ -187,30 +216,27 @@ class BrailleOCRApp:
 
         draw = ImageDraw.Draw(pil_img)
 
-        def wrap_braille(braille, font, max_width, original_text):
-            # Treat both spaces and newlines as word boundaries
-            text_for_split = original_text.replace('\n', ' ')
-            if " " not in text_for_split:
-                return [braille]
-            # Wrap at Braille spaces, but only if needed
-            braille_space = chr(0x2800)
-            words = [w for w in braille.split(braille_space) if w]  # filter out empty strings
+        def wrap_braille_lines(braille, font, max_width):
+            # Split the braille text into lines using \n, then wrap each line by width
+            user_lines = braille.split('\n')
             lines = []
-            current = ""
-            for word in words:
-                test = (current + braille_space + word).strip(braille_space) if current else word
-                bbox = draw.textbbox((0, 0), test, font=font)
-                w = bbox[2] - bbox[0]
-                if w > max_width and current:
+            for user_line in user_lines:
+                words = [w for w in user_line.split(' ') if w.strip() != '']
+                current = ""
+                for word in words:
+                    test = (current + ' ' + word).strip() if current else word
+                    bbox = draw.textbbox((0, 0), test, font=font)
+                    w = bbox[2] - bbox[0]
+                    if w > max_width and current:
+                        lines.append(current)
+                        current = word
+                    else:
+                        current = test
+                if current or not words:  # preserve empty lines
                     lines.append(current)
-                    current = word
-                else:
-                    current = test
-            if current:
-                lines.append(current)
             return lines
 
-        for ((x1, y1, x2, y2), (text, braille)) in zip(selected_boxes, text_pairs):
+        for (x1, y1, x2, y2), (text, braille) in text_pairs:
             draw.rectangle([x1, y1, x2, y2], fill=(255, 255, 255))
             box_w = x2 - x1
             box_h = y2 - y1
@@ -223,17 +249,11 @@ class BrailleOCRApp:
                         test_font = ImageFont.truetype(font_path, size)
                     except Exception:
                         test_font = base_font
-                    lines = wrap_braille(braille, test_font, box_w, text)
-                    # Calculate total height
-                    line_heights = []
-                    for line in lines:
-                        bbox = draw.textbbox((0, 0), line, font=test_font)
-                        line_heights.append(bbox[3] - bbox[1])
+                    lines = wrap_braille_lines(braille, test_font, box_w)
+                    line_heights = [draw.textbbox((0, 0), line, font=test_font)[3] - draw.textbbox((0, 0), line, font=test_font)[1] for line in lines]
                     total_height = sum(line_heights) + (len(lines) - 1) * 4
-                    # Check if fits
                     if total_height > box_h:
                         break
-                    # Also check width of each line
                     if any(draw.textbbox((0, 0), line, font=test_font)[2] - draw.textbbox((0, 0), line, font=test_font)[0] > box_w for line in lines):
                         break
                     best_font_size = size
@@ -244,18 +264,21 @@ class BrailleOCRApp:
                 except Exception:
                     font = base_font
 
-                # Calculate starting y to center vertically
                 line_heights = [draw.textbbox((0, 0), line, font=font)[3] - draw.textbbox((0, 0), line, font=font)[1] for line in best_lines]
                 total_height = sum(line_heights) + (len(best_lines) - 1) * 4
                 y = y1 + (box_h - total_height) // 2
 
-                for i, line in enumerate(best_lines):
-                    bbox = draw.textbbox((0, 0), line, font=font)
-                    w = bbox[2] - bbox[0]
-                    h = bbox[3] - bbox[1]
-                    x = x1 + (box_w - w) // 2
-                    draw.text((x, y), line, font=font, fill=(0, 0, 0))
-                    y += h + 4  # 4 pixels between lines
+                for line in best_lines:
+                    if line:
+                        bbox = draw.textbbox((0, 0), line, font=font)
+                        w = bbox[2] - bbox[0]
+                        h = bbox[3] - bbox[1]
+                        x = x1 + (box_w - w) // 2
+                        draw.text((x, y), line, font=font, fill=(0, 0, 0))
+                    else:
+                        # For empty lines, estimate height using a typical character
+                        h = draw.textbbox((0, 0), "A", font=font)[3] - draw.textbbox((0, 0), "A", font=font)[1]
+                    y += h + 4
 
         img_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
         self.show_image(img_bgr)
