@@ -48,22 +48,30 @@ class BrailleOCRApp:
         self.region_thresh_button = tk.Button(btn_frame, text="Set Region Threshold", command=self.set_region_threshold)
         self.region_thresh_button.pack(side="left", padx=5)
 
+        self.invert_button = tk.Button(btn_frame, text="Invert Image", command=self.invert_image)
+        self.invert_button.pack(side="left", padx=5)
+
         self.canvas.bind("<ButtonPress-1>", self.on_mouse_down)
         self.canvas.bind("<ButtonRelease-1>", self.on_mouse_up)
 
         self.orig_image = None
         self.tk_img = None
+        self.is_inverted = False
         self.scale = 1.0
         self.load_image()
+
+    def invert_image(self):
+        self.is_inverted = not self.is_inverted
+        self.update_threshold(self.slider.get())
 
     def load_image(self):
         selected_boxes.clear()
         path = filedialog.askopenfilename(filetypes=[("Images", "*.png;*.jpg;*.jpeg")])
         if not path:
             self.root.quit()
-
         self.orig_image = cv2.imread(path)
         self.gray_image = cv2.cvtColor(self.orig_image, cv2.COLOR_BGR2GRAY)
+        self.is_inverted = False  # Reset inversion on new image load
         self.binary_image = None
         self.update_threshold(self.slider.get())
 
@@ -71,7 +79,10 @@ class BrailleOCRApp:
         if not hasattr(self, 'gray_image') or self.gray_image is None:
             return
         thresh_val = int(value)
-        _, thresh = cv2.threshold(self.gray_image, thresh_val, 255, cv2.THRESH_BINARY)
+        img = self.gray_image
+        if self.is_inverted:
+            img = cv2.bitwise_not(img)
+        _, thresh = cv2.threshold(img, thresh_val, 255, cv2.THRESH_BINARY)
         self.binary_image = thresh
         self.show_image(thresh)
 
