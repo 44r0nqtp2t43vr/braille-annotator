@@ -243,77 +243,34 @@ class BrailleOCRApp:
         pil_img = Image.fromarray(img_rgb)
 
         font_path = "DejaVuSans-Bold.ttf"
+        fixed_font_size = 120  # ← Constant Braille font size
+
         try:
-            base_font = ImageFont.truetype(font_path, 40)
+            font = ImageFont.truetype(font_path, fixed_font_size)
         except Exception as e:
             print("Font load error:", e)
-            base_font = ImageFont.load_default()
+            font = ImageFont.load_default()
 
         draw = ImageDraw.Draw(pil_img)
 
-        def wrap_braille_lines(braille, font, max_width):
-            # Split the braille text into lines using \n, then wrap each line by width
-            user_lines = braille.split('\n')
-            lines = []
-            for user_line in user_lines:
-                words = [w for w in user_line.split(' ') if w.strip() != '']
-                current = ""
-                for word in words:
-                    test = (current + ' ' + word).strip() if current else word
-                    bbox = draw.textbbox((0, 0), test, font=font)
-                    w = bbox[2] - bbox[0]
-                    if w > max_width and current:
-                        lines.append(current)
-                        current = word
-                    else:
-                        current = test
-                if current or not words:  # preserve empty lines
-                    lines.append(current)
-            return lines
-
         for (x1, y1, x2, y2), (text, braille) in text_pairs:
             draw.rectangle([x1, y1, x2, y2], fill=(255, 255, 255))
-            box_w = x2 - x1
-            box_h = y2 - y1
 
-            if braille:
-                best_font_size = 10
-                best_lines = [braille]
-                for size in range(10, 200):
-                    try:
-                        test_font = ImageFont.truetype(font_path, size)
-                    except Exception:
-                        test_font = base_font
-                    lines = wrap_braille_lines(braille, test_font, box_w)
-                    line_heights = [draw.textbbox((0, 0), line, font=test_font)[3] - draw.textbbox((0, 0), line, font=test_font)[1] for line in lines]
-                    total_height = sum(line_heights) + (len(lines) - 1) * 4
-                    if total_height > box_h:
-                        break
-                    if any(draw.textbbox((0, 0), line, font=test_font)[2] - draw.textbbox((0, 0), line, font=test_font)[0] > box_w for line in lines):
-                        break
-                    best_font_size = size
-                    best_lines = lines
+            # Position starting point (top-left of box with padding)
+            padding_x = 10
+            padding_y = 10
+            start_x = x1 + padding_x
+            start_y = y1 + padding_y
 
-                try:
-                    font = ImageFont.truetype(font_path, best_font_size)
-                except Exception:
-                    font = base_font
+            # Draw each line of Braille as-is, fixed font size
+            for line in braille.splitlines():
+                draw.text((start_x, start_y), line, font=font, fill=(0, 0, 0))
+                line_height = draw.textbbox((0, 0), line, font=font)[3] - draw.textbbox((0, 0), line, font=font)[1]
+                start_y += line_height + 4  # 4px line spacing
 
-                line_heights = [draw.textbbox((0, 0), line, font=font)[3] - draw.textbbox((0, 0), line, font=font)[1] for line in best_lines]
-                total_height = sum(line_heights) + (len(best_lines) - 1) * 4
-                y = y1 + (box_h - total_height) // 2
-
-                for line in best_lines:
-                    if line:
-                        bbox = draw.textbbox((0, 0), line, font=font)
-                        w = bbox[2] - bbox[0]
-                        h = bbox[3] - bbox[1]
-                        x = x1 + (box_w - w) // 2
-                        draw.text((x, y), line, font=font, fill=(0, 0, 0))
-                    else:
-                        # For empty lines, estimate height using a typical character
-                        h = draw.textbbox((0, 0), "A", font=font)[3] - draw.textbbox((0, 0), "A", font=font)[1]
-                    y += h + 4
+                # Stop drawing if we exceed bounding box
+                if start_y > y2:
+                    break
 
         img_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
         self.show_image(img_bgr)
