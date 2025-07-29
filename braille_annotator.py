@@ -5,7 +5,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
 from PIL import Image, ImageTk, ImageDraw, ImageFont
 
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'  # Update this path if needed
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 selected_boxes = []
 drawing = False
@@ -27,135 +27,139 @@ class BrailleOCRApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Braille OCR Tool")
-        
-        self.canvas = tk.Canvas(root, cursor="cross", bg="gray20")
-        self.canvas.pack(fill="both", expand=True)
 
-        self.slider = tk.Scale(root, from_=0, to=255, orient="horizontal",
-                               label="Threshold", command=self.update_threshold)
+        # A4 Landscape @ 300 DPI
+        self.a4_width = 3508
+        self.a4_height = 2480
+        self.preview_scale = 0.2
+        self.canvas_width = int(self.a4_width * self.preview_scale)
+        self.canvas_height = int(self.a4_height * self.preview_scale)
+
+        self.root.minsize(width=self.canvas_width + 100, height=self.canvas_height + 200)
+
+        self.canvas = tk.Canvas(root, width=self.canvas_width, height=self.canvas_height, bg="gray20", cursor="cross")
+        self.canvas.pack(side="top", fill="both", expand=True)
+
+        self.slider = tk.Scale(root, from_=0, to=255, orient="horizontal", label="Threshold")
         self.slider.set(128)
-        self.slider.pack(fill="x", padx=10)
+        self.slider.pack(side="top", fill="x", padx=10)
 
         btn_frame = tk.Frame(root)
-        btn_frame.pack(pady=5)
+        btn_frame.pack(side="top", fill="x", pady=5)
 
-        self.save_button = tk.Button(btn_frame, text="Save Braille Output", command=self.save_braille_output)
-        self.save_button.pack(side="left", padx=5)
-
-        self.preview_button = tk.Button(btn_frame, text="Preview Braille Text", command=self.preview_braille_text)
-        self.preview_button.pack(side="left", padx=5)
-
-        self.region_thresh_button = tk.Button(btn_frame, text="Set Region Threshold", command=self.set_region_threshold)
-        self.region_thresh_button.pack(side="left", padx=5)
-
-        self.invert_button = tk.Button(btn_frame, text="Invert Image", command=self.invert_image)
-        self.invert_button.pack(side="left", padx=5)
+        tk.Button(btn_frame, text="Save Braille Output", command=self.save_braille_output).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="Preview Braille Text", command=self.preview_braille_text).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="Set Region Threshold", command=self.set_region_threshold).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="Invert Image", command=self.invert_image).pack(side="left", padx=5)
 
         self.canvas.bind("<ButtonPress-1>", self.on_mouse_down)
         self.canvas.bind("<ButtonRelease-1>", self.on_mouse_up)
 
         self.orig_image = None
+        self.gray_image = None
+        self.binary_image = None
         self.tk_img = None
         self.is_inverted = False
-        self.scale = 1.0
+
         self.load_image()
 
-    def invert_image(self):
-        self.is_inverted = not self.is_inverted
-        self.update_threshold(self.slider.get())
+        # Bind slider only after image is loaded
+        self.slider.configure(command=self.update_threshold)
 
     def load_image(self):
         selected_boxes.clear()
         path = filedialog.askopenfilename(filetypes=[("Images", "*.png;*.jpg;*.jpeg")])
         if not path:
             self.root.quit()
-        self.orig_image = cv2.imread(path)
+
+        # Ask user for orientation
+        use_portrait = messagebox.askyesno("Paper Orientation", "Use portrait orientation (A4 210×297mm)?")
+
+        if use_portrait:
+            self.a4_width = 2480   # portrait: 210mm wide
+            self.a4_height = 3508  # portrait: 297mm tall
+        else:
+            self.a4_width = 3508   # landscape: 297mm wide
+            self.a4_height = 2480  # landscape: 210mm tall
+
+        # Update preview scale and canvas size
+        self.canvas_width = int(self.a4_width * self.preview_scale)
+        self.canvas_height = int(self.a4_height * self.preview_scale)
+        self.canvas.config(width=self.canvas_width, height=self.canvas_height)
+        self.root.minsize(width=self.canvas_width + 100, height=self.canvas_height + 200)
+
+        img = cv2.imread(path)
+        self.orig_image = img
         self.gray_image = cv2.cvtColor(self.orig_image, cv2.COLOR_BGR2GRAY)
-        self.is_inverted = False  # Reset inversion on new image load
-        self.binary_image = None
         self.update_threshold(self.slider.get())
 
     def update_threshold(self, value):
         if not hasattr(self, 'gray_image') or self.gray_image is None:
             return
-        thresh_val = int(value)
         img = self.gray_image
         if self.is_inverted:
             img = cv2.bitwise_not(img)
-        _, thresh = cv2.threshold(img, thresh_val, 255, cv2.THRESH_BINARY)
-        self.binary_image = thresh
-        self.show_image(thresh)
+        _, thresh = cv2.threshold(img, int(value), 255, cv2.THRESH_BINARY)
+        self.binary_image = self.embed_in_a4_canvas(thresh)
+        self.show_image(self.binary_image)
+
+    def embed_in_a4_canvas(self, image):
+        h, w = image.shape
+        scale_w = self.a4_width / w
+        scale_h = self.a4_height / h
+        self.scale = min(scale_w, scale_h)
+        new_w = int(w * self.scale)
+        new_h = int(h * self.scale)
+        resized = cv2.resize(image, (new_w, new_h))
+        a4 = np.full((self.a4_height, self.a4_width), 255, dtype=np.uint8)
+        self.pad_x = (self.a4_width - new_w) // 2
+        self.pad_y = (self.a4_height - new_h) // 2
+        a4[self.pad_y:self.pad_y+new_h, self.pad_x:self.pad_x+new_w] = resized
+        return a4
 
     def show_image(self, image):
-        # Always draw from full resolution but show scaled preview (fit-to-screen)
-        h, w = image.shape
-        screen_h = self.root.winfo_screenheight() - 200
-        screen_w = self.root.winfo_screenwidth() - 100
-        self.scale = min(screen_w / w, screen_h / h, 1.0)
-
-        disp_img = cv2.resize(image, (int(w * self.scale), int(h * self.scale)))
-        rgb = cv2.cvtColor(disp_img, cv2.COLOR_GRAY2RGB)
+        preview = cv2.resize(image, (self.canvas_width, self.canvas_height))
+        rgb = cv2.cvtColor(preview, cv2.COLOR_GRAY2RGB)
         pil_img = Image.fromarray(rgb)
         self.tk_img = ImageTk.PhotoImage(pil_img)
-
         self.canvas.delete("all")
-        self.canvas.create_image((screen_w - disp_img.shape[1]) // 2, (screen_h - disp_img.shape[0]) // 2,
-                                 image=self.tk_img, anchor="nw", tags="img")
-        self.canvas.config(scrollregion=self.canvas.bbox("all"))
-
-    def set_region_threshold(self):
-        if not selected_boxes:
-            messagebox.showinfo("Info", "No region selected. Draw a box first.")
-            return
-        # Use the last selected box
-        x1, y1, x2, y2 = selected_boxes[-1]
-        thresh_val = tk.simpledialog.askinteger("Region Threshold", "Enter threshold value (0-255):", minvalue=0, maxvalue=255)
-        if thresh_val is None:
-            return
-        # Apply threshold only to the selected region
-        region = self.gray_image[y1:y2, x1:x2]
-        _, region_thresh = cv2.threshold(region, thresh_val, 255, cv2.THRESH_BINARY)
-        # Update the binary image only in the region
-        self.binary_image[y1:y2, x1:x2] = region_thresh
-        self.show_image(self.binary_image)
+        self.canvas.create_image(0, 0, image=self.tk_img, anchor="nw")
 
     def on_mouse_down(self, event):
         global ix, iy, drawing
         drawing = True
-        # Calculate offset due to centering
-        screen_h = self.root.winfo_screenheight() - 200
-        screen_w = self.root.winfo_screenwidth() - 100
-        h, w = self.binary_image.shape
-        disp_w, disp_h = int(w * self.scale), int(h * self.scale)
-        offset_x = (screen_w - disp_w) // 2
-        offset_y = (screen_h - disp_h) // 2
-        ix = self.canvas.canvasx(event.x) - offset_x
-        iy = self.canvas.canvasy(event.y) - offset_y
+        ix = int(self.canvas.canvasx(event.x) / self.preview_scale)
+        iy = int(self.canvas.canvasy(event.y) / self.preview_scale)
 
     def on_mouse_up(self, event):
         global drawing
         if drawing:
             drawing = False
-            screen_h = self.root.winfo_screenheight() - 200
-            screen_w = self.root.winfo_screenwidth() - 100
-            h, w = self.binary_image.shape
-            disp_w, disp_h = int(w * self.scale), int(h * self.scale)
-            offset_x = (screen_w - disp_w) // 2
-            offset_y = (screen_h - disp_h) // 2
-            ex = self.canvas.canvasx(event.x) - offset_x
-            ey = self.canvas.canvasy(event.y) - offset_y
-            # Only allow coordinates inside the displayed image
-            ex = min(max(ex, 0), disp_w)
-            ey = min(max(ey, 0), disp_h)
-            ix_clamped = min(max(ix, 0), disp_w)
-            iy_clamped = min(max(iy, 0), disp_h)
-            x1, y1 = int(ix_clamped / self.scale), int(iy_clamped / self.scale)
-            x2, y2 = int(ex / self.scale), int(ey / self.scale)
-            print(f"Raw coords: ix={ix}, iy={iy}, ex={ex}, ey={ey}")
-            print(f"Image coords: x1={x1}, y1={y1}, x2={x2}, y2={y2}")
-            selected_boxes.append((min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)))
-            print("Selected boxes:", selected_boxes)
-            self.canvas.create_rectangle(ix + offset_x, iy + offset_y, ex + offset_x, ey + offset_y, outline="lime", width=2)
+            ex = int(self.canvas.canvasx(event.x) / self.preview_scale)
+            ey = int(self.canvas.canvasy(event.y) / self.preview_scale)
+            x1, y1 = min(ix, ex), min(iy, ey)
+            x2, y2 = max(ix, ex), max(iy, ey)
+            selected_boxes.append((x1, y1, x2, y2))
+            self.canvas.create_rectangle(x1 * self.preview_scale, y1 * self.preview_scale,
+                                         x2 * self.preview_scale, y2 * self.preview_scale,
+                                         outline="lime", width=2)
+
+    def invert_image(self):
+        self.is_inverted = not self.is_inverted
+        self.update_threshold(self.slider.get())
+
+    def set_region_threshold(self):
+        if not selected_boxes:
+            messagebox.showinfo("Info", "No region selected.")
+            return
+        x1, y1, x2, y2 = selected_boxes[-1]
+        val = simpledialog.askinteger("Threshold", "Value 0–255:", minvalue=0, maxvalue=255)
+        if val is None:
+            return
+        region = self.gray_image[y1:y2, x1:x2]
+        _, region_thresh = cv2.threshold(region, val, 255, cv2.THRESH_BINARY)
+        self.binary_image[y1:y2, x1:x2] = region_thresh
+        self.show_image(self.binary_image)
 
     def extract_text_and_braille(self):
         braille_output = []
@@ -316,21 +320,17 @@ class BrailleOCRApp:
         self.binary_image = img_bgr
 
     def save_braille_output(self):
-        # Convert binary image to BGR for colored overlay
-        output = cv2.cvtColor(self.binary_image, cv2.COLOR_GRAY2BGR)
+        output = cv2.cvtColor(self.binary_image, cv2.COLOR_GRAY2RGB)
         for (x1, y1, x2, y2) in selected_boxes:
-            roi = self.binary_image[y1:y2, x1:x2]
-            text = pytesseract.image_to_string(roi, config="--psm 6").strip()
+            text = pytesseract.image_to_string(self.binary_image[y1:y2, x1:x2], config="--psm 6").strip()
             for idx, ch in enumerate(text):
                 braille_char = char_to_braille(ch)
-                # Draw Braille text in color (e.g., green) for visibility
                 cv2.putText(output, braille_char, (x1 + idx * 20, y1 + 30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
-        save_path = filedialog.asksaveasfilename(defaultextension=".png",
-                                                filetypes=[("PNG", "*.png")])
+        save_path = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG", "*.png")])
         if save_path:
-            cv2.imwrite(save_path, output)
+            Image.fromarray(output).save(save_path, dpi=(300, 300))
             messagebox.showinfo("Success", f"Saved to: {save_path}")
 
 if __name__ == "__main__":
