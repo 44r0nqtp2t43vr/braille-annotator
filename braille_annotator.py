@@ -1,3 +1,12 @@
+"""
+TODO:
+- white background on braille text
+- add set region threshold
+- add erase function
+- add move function
+"""
+
+
 import cv2
 import numpy as np
 import pytesseract
@@ -10,6 +19,9 @@ pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tessera
 selected_boxes = []
 drawing = False
 ix, iy = -1, -1
+
+BRAILLE_FONT_SIZE = 100
+BRAILLE_FONT = "DejaVuSans-Bold.ttf"
 
 def char_to_braille(c):
     BRAILLE_BASE = 0x2800
@@ -219,8 +231,8 @@ class BrailleOCRApp:
         img = cv2.cvtColor(self.binary_image, cv2.COLOR_GRAY2RGB)
         pil_img = Image.fromarray(img)
         draw = ImageDraw.Draw(pil_img)
-        font_path = "DejaVuSans-Bold.ttf"
-        font_size = 100
+        font_path = BRAILLE_FONT
+        font_size = BRAILLE_FONT_SIZE
         try:
             font = ImageFont.truetype(font_path, font_size)
         except:
