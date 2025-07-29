@@ -46,7 +46,6 @@ class BrailleOCRApp:
 
         tk.Button(btn_frame, text="Save Braille Output", command=self.save_braille_output).pack(side="left", padx=5)
         tk.Button(btn_frame, text="Preview Braille Text", command=self.preview_braille_text).pack(side="left", padx=5)
-        tk.Button(btn_frame, text="Set Region Threshold", command=self.set_region_threshold).pack(side="left", padx=5)
         tk.Button(btn_frame, text="Invert Image", command=self.invert_image).pack(side="left", padx=5)
         tk.Button(btn_frame, text="Undo Overlay", command=self.undo_overlay).pack(side="left", padx=5)
 
@@ -141,72 +140,6 @@ class BrailleOCRApp:
         self.is_inverted = not self.is_inverted
         self.update_threshold(self.slider.get())
 
-    def set_region_threshold(self):
-        messagebox.showinfo("Draw Region", "Draw a region to apply threshold.")
-
-        # Temporary box capture
-        temp_box = []
-
-        def on_temp_down(event):
-            temp_box.clear()
-            temp_box.append((event.x, event.y))
-
-        def on_temp_up(event):
-            if not temp_box:
-                return
-            x1_canvas, y1_canvas = temp_box[0]
-            x2_canvas, y2_canvas = event.x, event.y
-
-            # Translate canvas to image coordinates
-            screen_h = self.root.winfo_screenheight() - 200
-            screen_w = self.root.winfo_screenwidth() - 100
-            h, w = self.binary_image.shape
-            disp_w, disp_h = int(w * self.scale), int(h * self.scale)
-            offset_x = (screen_w - disp_w) // 2
-            offset_y = (screen_h - disp_h) // 2
-
-            # Adjust for scaling and offset
-            x1 = int((self.canvas.canvasx(x1_canvas) - offset_x) / self.scale)
-            y1 = int((self.canvas.canvasy(y1_canvas) - offset_y) / self.scale)
-            x2 = int((self.canvas.canvasx(x2_canvas) - offset_x) / self.scale)
-            y2 = int((self.canvas.canvasy(y2_canvas) - offset_y) / self.scale)
-
-            x1, x2 = sorted((max(0, x1), min(w, x2)))
-            y1, y2 = sorted((max(0, y1), min(h, y2)))
-
-            if x2 - x1 < 10 or y2 - y1 < 10:
-                messagebox.showwarning("Too small", "Selected region is too small.")
-                cleanup_bindings()
-                return
-
-            val = simpledialog.askinteger("Threshold", "Value 0–255:", minvalue=0, maxvalue=255)
-            if val is None:
-                cleanup_bindings()
-                return
-
-            # Apply threshold
-            region = self.binary_image[y1:y2, x1:x2]
-            _, region_thresh = cv2.threshold(region, val, 255, cv2.THRESH_BINARY)
-            self.binary_image[y1:y2, x1:x2] = region_thresh
-
-            # Update output_img for display
-            region_rgb = Image.fromarray(region_thresh).convert("RGB")
-            self.output_img.paste(region_rgb, (x1, y1))
-
-            # Redraw
-            self.display_image(self.output_img)
-
-            cleanup_bindings()
-
-        def cleanup_bindings():
-            self.canvas.unbind("<ButtonPress-1>")
-            self.canvas.unbind("<ButtonRelease-1>")
-
-        # Bind new interaction
-        self.canvas.bind("<ButtonPress-1>", on_temp_down)
-        self.canvas.bind("<ButtonRelease-1>", on_temp_up)
-
-
     def extract_text_and_braille(self):
         results = []
         for (x1, y1, x2, y2) in selected_boxes:
@@ -287,7 +220,7 @@ class BrailleOCRApp:
         pil_img = Image.fromarray(img)
         draw = ImageDraw.Draw(pil_img)
         font_path = "DejaVuSans-Bold.ttf"
-        font_size = 50
+        font_size = 100
         try:
             font = ImageFont.truetype(font_path, font_size)
         except:
