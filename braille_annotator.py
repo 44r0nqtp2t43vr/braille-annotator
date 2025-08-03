@@ -188,12 +188,10 @@ class BrailleOCRApp:
                 stripped = line.strip()
 
                 if stripped.startswith("Box:"):
-                    # Save previous
                     if current_box and braille_lines:
                         braille_text = "\n".join(braille_lines).strip()
                         print(f"\n[Overlaying Braille]\nBox: {current_box}\nBraille:\n{braille_text}\n{'-'*40}")
                         pairs.append((current_box, braille_text))
-                    # Start new box
                     try:
                         box_str = stripped[5:].strip()
                         current_box = tuple(map(int, box_str.strip("()").split(",")))
@@ -204,24 +202,28 @@ class BrailleOCRApp:
 
                 elif stripped.lower().startswith("braille:"):
                     reading_braille = True
-                    # Include the first braille line (after "Braille: ")
                     braille_line = line.partition("Braille:")[2].strip()
                     if braille_line:
                         braille_lines.append(braille_line)
 
                 elif stripped.lower().startswith("text:"):
-                    continue  # Optional line
+                    continue
 
                 elif reading_braille and current_box:
                     braille_lines.append(line)
 
-            # Final block
             if current_box and braille_lines:
                 braille_text = "\n".join(braille_lines).strip()
                 print(f"\n[Overlaying Braille]\nBox: {current_box}\nBraille:\n{braille_text}\n{'-'*40}")
                 pairs.append((current_box, braille_text))
 
             self.overlay_braille_on_image(pairs)
+
+            # 🔻 Clear bounding boxes after applying
+            selected_boxes.clear()
+            self.canvas.delete("all")
+            self.show_image(self.binary_image)
+
             win.destroy()
 
         tk.Button(win, text="Apply to Canvas", command=apply).pack(pady=5)
