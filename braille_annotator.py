@@ -285,7 +285,11 @@ class BrailleOCRApp:
         self.show_image(self.binary_image)
 
     def undo_overlay(self):
-        if self.backup_image is not None:
+        if selected_boxes:
+            selected_boxes.clear()
+            self.update_threshold(self.slider.get())  # Re-render without rectangles
+            messagebox.showinfo("Undo", "Selection cleared.")
+        elif self.backup_image is not None:
             self.binary_image = self.backup_image.copy()
             self.show_image(self.binary_image)
             messagebox.showinfo("Undo", "Last overlay reverted.")
