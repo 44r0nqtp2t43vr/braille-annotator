@@ -1,15 +1,10 @@
-"""
-TODO:
-- add set region threshold
-"""
-
-
 import cv2
 import numpy as np
 import pytesseract
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
 from PIL import Image, ImageTk, ImageDraw, ImageFont
+from region_threshold_editor import RegionThresholdEditor
 
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
@@ -60,6 +55,7 @@ class BrailleOCRApp:
         tk.Button(btn_frame, text="Undo Overlay", command=self.undo_overlay).pack(side="left", padx=5)
         tk.Button(btn_frame, text="Erase Region", command=self.erase_selected_region).pack(side="left", padx=5)
         tk.Button(btn_frame, text="Move Region", command=self.enter_move_mode).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="Set Region Threshold", command=self.open_region_threshold_editor).pack(side="left", padx=5)
 
         self.canvas.bind("<ButtonPress-1>", self.on_mouse_down)
         self.canvas.bind("<ButtonRelease-1>", self.on_mouse_up)
@@ -352,6 +348,10 @@ class BrailleOCRApp:
         # Paste to new position
         self.binary_image[new_y1:new_y2, new_x1:new_x2] = roi
         self.show_image(self.binary_image)
+
+    def open_region_threshold_editor(self):
+        RegionThresholdEditor(self)
+
 
     def save_braille_output(self):
         output = cv2.cvtColor(self.binary_image, cv2.COLOR_GRAY2RGB)
