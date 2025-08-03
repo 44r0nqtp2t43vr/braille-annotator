@@ -1,6 +1,5 @@
 """
 TODO:
-- white background on braille text
 - add set region threshold
 - add erase function
 - add move function
@@ -61,6 +60,8 @@ class BrailleOCRApp:
         tk.Button(btn_frame, text="Preview Braille Text", command=self.preview_braille_text).pack(side="left", padx=5)
         tk.Button(btn_frame, text="Invert Image", command=self.invert_image).pack(side="left", padx=5)
         tk.Button(btn_frame, text="Undo Overlay", command=self.undo_overlay).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="Erase Region", command=self.erase_selected_region).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="Move Region", command=self.enter_move_mode).pack(side="left", padx=5)
 
         self.canvas.bind("<ButtonPress-1>", self.on_mouse_down)
         self.canvas.bind("<ButtonRelease-1>", self.on_mouse_up)
@@ -71,6 +72,8 @@ class BrailleOCRApp:
         self.backup_image = None  # For undo
         self.tk_img = None
         self.is_inverted = False
+        self.move_mode = False
+        self.move_start_box = None
 
         self.load_image()
         self.slider.configure(command=self.update_threshold)
@@ -138,16 +141,24 @@ class BrailleOCRApp:
 
     def on_mouse_up(self, event):
         global drawing
+        ex = int(self.canvas.canvasx(event.x) / self.preview_scale)
+        ey = int(self.canvas.canvasy(event.y) / self.preview_scale)
+
+        if self.move_mode and self.move_start_box:
+            self.move_region(self.move_start_box, (ex, ey))
+            self.move_mode = False
+            self.move_start_box = None
+            selected_boxes.clear()
+            return
+
         if drawing:
             drawing = False
-            ex = int(self.canvas.canvasx(event.x) / self.preview_scale)
-            ey = int(self.canvas.canvasy(event.y) / self.preview_scale)
             x1, y1 = min(ix, ex), min(iy, ey)
             x2, y2 = max(ix, ex), max(iy, ey)
             selected_boxes.append((x1, y1, x2, y2))
             self.canvas.create_rectangle(x1 * self.preview_scale, y1 * self.preview_scale,
-                                         x2 * self.preview_scale, y2 * self.preview_scale,
-                                         outline="lime", width=2)
+                                        x2 * self.preview_scale, y2 * self.preview_scale,
+                                        outline="lime", width=2)
 
     def invert_image(self):
         self.is_inverted = not self.is_inverted
@@ -287,12 +298,60 @@ class BrailleOCRApp:
     def undo_overlay(self):
         if selected_boxes:
             selected_boxes.clear()
-            self.update_threshold(self.slider.get())  # Re-render without rectangles
+            self.show_image(self.binary_image)  # ✅ Just redraw current image
             messagebox.showinfo("Undo", "Selection cleared.")
-        elif self.backup_image is not None:
+            return
+
+        if self.backup_image is not None:
             self.binary_image = self.backup_image.copy()
             self.show_image(self.binary_image)
             messagebox.showinfo("Undo", "Last overlay reverted.")
+
+    def erase_selected_region(self):
+        if not selected_boxes:
+            messagebox.showinfo("Erase", "No selected region to erase.")
+            return
+
+        self.backup_image = self.binary_image.copy()
+        for (x1, y1, x2, y2) in selected_boxes:
+            cv2.rectangle(self.binary_image, (x1, y1), (x2, y2), color=255, thickness=-1)  # White fill
+
+        selected_boxes.clear()
+        self.show_image(self.binary_image)
+        messagebox.showinfo("Erase", "Selected region erased.")
+
+    def enter_move_mode(self):
+        if len(selected_boxes) != 1:
+            messagebox.showinfo("Move", "Please select one region to move.")
+            return
+        self.move_mode = True
+        self.move_start_box = selected_boxes[0]
+        messagebox.showinfo("Move", "Now click where you want to move the selected region.")
+
+    def move_region(self, box, new_point):
+        self.backup_image = self.binary_image.copy()
+
+        x1, y1, x2, y2 = box
+        roi = self.binary_image[y1:y2, x1:x2].copy()
+        w, h = x2 - x1, y2 - y1
+
+        # Erase original
+        cv2.rectangle(self.binary_image, (x1, y1), (x2, y2), color=255, thickness=-1)
+
+        # Compute new top-left
+        new_x1 = new_point[0]
+        new_y1 = new_point[1]
+        new_x2 = new_x1 + w
+        new_y2 = new_y1 + h
+
+        # Bounds check
+        if new_x2 > self.binary_image.shape[1] or new_y2 > self.binary_image.shape[0]:
+            messagebox.showwarning("Move", "Move exceeds image bounds.")
+            return
+
+        # Paste to new position
+        self.binary_image[new_y1:new_y2, new_x1:new_x2] = roi
+        self.show_image(self.binary_image)
 
     def save_braille_output(self):
         output = cv2.cvtColor(self.binary_image, cv2.COLOR_GRAY2RGB)
