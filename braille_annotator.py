@@ -1,8 +1,6 @@
 """
 TODO:
 - add set region threshold
-- add erase function
-- add move function
 """
 
 
@@ -69,7 +67,7 @@ class BrailleOCRApp:
         self.orig_image = None
         self.gray_image = None
         self.binary_image = None
-        self.backup_image = None  # For undo
+        self.undo_stack = []
         self.tk_img = None
         self.is_inverted = False
         self.move_mode = False
@@ -110,7 +108,7 @@ class BrailleOCRApp:
             img = cv2.bitwise_not(img)
         _, thresh = cv2.threshold(img, int(value), 255, cv2.THRESH_BINARY)
         self.binary_image = self.embed_in_a4_canvas(thresh)
-        self.backup_image = self.binary_image.copy()  # Backup for undo
+        self.undo_stack.append(self.binary_image.copy())
         self.show_image(self.binary_image)
 
     def embed_in_a4_canvas(self, image):
@@ -253,7 +251,7 @@ class BrailleOCRApp:
         tk.Button(win, text="Apply to Canvas", command=apply).pack(pady=5)
 
     def overlay_braille_on_image(self, pairs):
-        self.backup_image = self.binary_image.copy()
+        self.undo_stack.append(self.binary_image.copy())
         img = cv2.cvtColor(self.binary_image, cv2.COLOR_GRAY2RGB)
         pil_img = Image.fromarray(img)
         draw = ImageDraw.Draw(pil_img)
@@ -298,21 +296,23 @@ class BrailleOCRApp:
     def undo_overlay(self):
         if selected_boxes:
             selected_boxes.clear()
-            self.show_image(self.binary_image)  # ✅ Just redraw current image
+            self.show_image(self.binary_image)
             messagebox.showinfo("Undo", "Selection cleared.")
             return
 
-        if self.backup_image is not None:
-            self.binary_image = self.backup_image.copy()
+        if self.undo_stack:
+            self.binary_image = self.undo_stack.pop()
             self.show_image(self.binary_image)
-            messagebox.showinfo("Undo", "Last overlay reverted.")
+            messagebox.showinfo("Undo", "Undid last operation.")
+        else:
+            messagebox.showinfo("Undo", "No more actions to undo.")
 
     def erase_selected_region(self):
         if not selected_boxes:
             messagebox.showinfo("Erase", "No selected region to erase.")
             return
 
-        self.backup_image = self.binary_image.copy()
+        self.undo_stack.append(self.binary_image.copy())
         for (x1, y1, x2, y2) in selected_boxes:
             cv2.rectangle(self.binary_image, (x1, y1), (x2, y2), color=255, thickness=-1)  # White fill
 
@@ -329,7 +329,7 @@ class BrailleOCRApp:
         messagebox.showinfo("Move", "Now click where you want to move the selected region.")
 
     def move_region(self, box, new_point):
-        self.backup_image = self.binary_image.copy()
+        self.undo_stack.append(self.binary_image.copy())
 
         x1, y1, x2, y2 = box
         roi = self.binary_image[y1:y2, x1:x2].copy()
