@@ -6,14 +6,22 @@ import cv2
 class RegionThresholdEditor:
     def __init__(self, parent_app):
         self.parent = parent_app
-        self.orig_image = parent_app.gray_image.copy()
-        self.is_inverted = parent_app.is_inverted
         self.scale = parent_app.preview_scale
         self.a4_width = parent_app.a4_width
         self.a4_height = parent_app.a4_height
+        self.is_inverted = parent_app.is_inverted
 
-        self.local_boxes = []  # Only used inside the popup
+        # Embed grayscale image once into A4 canvas
+        self.embedded_gray = parent_app.embed_in_a4_canvas(parent_app.gray_image.copy())
+        if self.is_inverted:
+            self.embedded_gray = cv2.bitwise_not(self.embedded_gray)
 
+        # Start with a copy of the current binary image
+        self.output_image = parent_app.binary_image.copy()
+
+        self.local_boxes = []
+
+        # Setup popup window
         self.window = tk.Toplevel(parent_app.root)
         self.window.title("Set Region Threshold")
 
@@ -52,26 +60,20 @@ class RegionThresholdEditor:
         self.canvas.bind("<ButtonPress-1>", self.on_mouse_down)
         self.canvas.bind("<ButtonRelease-1>", self.on_mouse_up)
 
-        self.output_image = self.parent.binary_image.copy()  # Editable binary image
         self.update_preview()
 
     def update_preview(self, *_):
-        # Start from original grayscale
-        canvas_img = self.parent.embed_in_a4_canvas(self.orig_image.copy())
+        # Start from the current output image
+        canvas_img = self.output_image.copy()
 
-        if self.is_inverted:
-            canvas_img = cv2.bitwise_not(canvas_img)
-
+        # Apply threshold only to selected regions
         for (x1, y1, x2, y2) in self.local_boxes:
-            # Apply threshold only to ROI
-            roi = canvas_img[y1:y2, x1:x2]
+            roi = self.embedded_gray[y1:y2, x1:x2].copy()
             _, roi_thresh = cv2.threshold(roi, int(self.slider.get()), 255, cv2.THRESH_BINARY)
             canvas_img[y1:y2, x1:x2] = roi_thresh
 
-        self.output_image = canvas_img.copy()
         self.preview_image = canvas_img
         self.show_image()
-
 
     def show_image(self):
         img = cv2.resize(self.preview_image, (self.canvas_width, self.canvas_height))
@@ -105,6 +107,14 @@ class RegionThresholdEditor:
         self.drawing = False
 
     def apply_changes(self):
-        self.parent.binary_image = self.output_image.copy()
+        # Apply only selected region thresholds to parent binary image
+        for (x1, y1, x2, y2) in self.local_boxes:
+            self.parent.binary_image[y1:y2, x1:x2] = self.preview_image[y1:y2, x1:x2]
+
+        # Optionally save regions if needed in parent
+        if hasattr(self.parent, "selected_boxes"):
+            self.parent.selected_boxes.clear()
+            self.parent.selected_boxes.extend(self.local_boxes)
+
         self.parent.show_image(self.parent.binary_image)
         self.window.destroy()
