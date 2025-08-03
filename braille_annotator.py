@@ -21,6 +21,7 @@ drawing = False
 ix, iy = -1, -1
 
 BRAILLE_FONT_SIZE = 100
+BRAILLE_FONT_PADDING = 25
 BRAILLE_FONT = "DejaVuSans-Bold.ttf"
 
 def char_to_braille(c):
@@ -156,12 +157,24 @@ class BrailleOCRApp:
         results = []
         for (x1, y1, x2, y2) in selected_boxes:
             roi = self.binary_image[y1:y2, x1:x2]
-            text = pytesseract.image_to_string(roi, config="--psm 6").strip()
-            braille = '\n'.join(
-                ''.join([char_to_braille(c) for c in line])
-                for line in text.splitlines()
-            )
-            results.append((x1, y1, x2, y2, text, braille))
+            text = pytesseract.image_to_string(roi, config="--psm 6")
+
+            # Split and strip each line of OCR text
+            text_lines = [line.strip() for line in text.splitlines() if line.strip()]
+
+            # Convert to Braille (strip text line first to prevent trailing braille space)
+            braille_lines = []
+            for line in text_lines:
+                braille_line = ''.join([char_to_braille(c) for c in line])
+                braille_lines.append(braille_line)
+
+            # Final Braille text
+            braille_text = '\n'.join(braille_lines).strip()
+
+            # Debug print
+            print(f"[BRAILLE DEBUG]\nRaw Text: {repr(text)}\nBraille: {repr(braille_text)}\n{'-'*40}")
+
+            results.append((x1, y1, x2, y2, text, braille_text))
         return results
 
     def preview_braille_text(self):
@@ -233,6 +246,7 @@ class BrailleOCRApp:
         img = cv2.cvtColor(self.binary_image, cv2.COLOR_GRAY2RGB)
         pil_img = Image.fromarray(img)
         draw = ImageDraw.Draw(pil_img)
+
         font_path = BRAILLE_FONT
         font_size = BRAILLE_FONT_SIZE
         try:
@@ -240,13 +254,32 @@ class BrailleOCRApp:
         except:
             font = ImageFont.load_default()
 
+        line_spacing = 5
+        padding_x = BRAILLE_FONT_PADDING
+        padding_y = BRAILLE_FONT_PADDING
+
         for (x1, y1, x2, y2), braille in pairs:
-            draw.rectangle([x1, y1, x2, y2], fill="white")
-            lines = braille.splitlines()
+            # Strip leading/trailing whitespace from block and lines
+            stripped_lines = [line.strip() for line in braille.strip().splitlines() if line.strip()]
             y = y1
-            for line in lines:
+
+            for line in stripped_lines:
+                bbox = font.getbbox(line)
+                text_width = bbox[2] - bbox[0]
+                text_height = bbox[3] - bbox[1]
+
+                bg_x1 = x1 - padding_x
+                bg_y1 = y - padding_y
+                bg_x2 = x1 + text_width + padding_x
+                bg_y2 = y + text_height + padding_y
+
+                # Draw white rectangle background
+                draw.rectangle([bg_x1, bg_y1, bg_x2, bg_y2], fill="white")
+
+                # Draw cleaned Braille text
                 draw.text((x1, y), line, font=font, fill="black")
-                y += font_size + 5
+
+                y += text_height + line_spacing
 
         self.binary_image = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
         self.show_image(self.binary_image)
