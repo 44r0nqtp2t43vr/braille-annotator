@@ -8,6 +8,7 @@ from region_threshold_editor import RegionThresholdEditor
 
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
+
 selected_boxes = []
 drawing = False
 ix, iy = -1, -1
