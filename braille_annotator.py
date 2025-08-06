@@ -4,12 +4,17 @@ import pytesseract
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
 from PIL import Image, ImageTk, ImageDraw, ImageFont
+from region_threshold_editor import RegionThresholdEditor
 
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'  # Update this path if needed
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 selected_boxes = []
 drawing = False
 ix, iy = -1, -1
+
+BRAILLE_FONT_SIZE = 100
+BRAILLE_FONT_PADDING = 25
+BRAILLE_FONT = "DejaVuSans.ttf"
 
 def char_to_braille(c):
     BRAILLE_BASE = 0x2800
@@ -27,310 +32,332 @@ class BrailleOCRApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Braille OCR Tool")
-        
-        self.canvas = tk.Canvas(root, cursor="cross", bg="gray20")
-        self.canvas.pack(fill="both", expand=True)
 
-        self.slider = tk.Scale(root, from_=0, to=255, orient="horizontal",
-                               label="Threshold", command=self.update_threshold)
+        self.a4_width = 3508
+        self.a4_height = 2480
+        self.preview_scale = 0.2
+        self.canvas_width = int(self.a4_width * self.preview_scale)
+        self.canvas_height = int(self.a4_height * self.preview_scale)
+
+        self.canvas = tk.Canvas(root, width=self.canvas_width, height=self.canvas_height, bg="gray20", cursor="cross")
+        self.canvas.pack(side="top", fill="both", expand=True)
+
+        self.slider = tk.Scale(root, from_=0, to=255, orient="horizontal", label="Threshold")
         self.slider.set(128)
-        self.slider.pack(fill="x", padx=10)
+        self.slider.pack(side="top", fill="x", padx=10)
 
         btn_frame = tk.Frame(root)
-        btn_frame.pack(pady=5)
+        btn_frame.pack(side="top", fill="x", pady=5)
 
-        self.save_button = tk.Button(btn_frame, text="Save Braille Output", command=self.save_braille_output)
-        self.save_button.pack(side="left", padx=5)
-
-        self.preview_button = tk.Button(btn_frame, text="Preview Braille Text", command=self.preview_braille_text)
-        self.preview_button.pack(side="left", padx=5)
-
-        self.region_thresh_button = tk.Button(btn_frame, text="Set Region Threshold", command=self.set_region_threshold)
-        self.region_thresh_button.pack(side="left", padx=5)
-
-        self.invert_button = tk.Button(btn_frame, text="Invert Image", command=self.invert_image)
-        self.invert_button.pack(side="left", padx=5)
+        tk.Button(btn_frame, text="Save Braille Output", command=self.save_braille_output).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="Preview Braille Text", command=self.preview_braille_text).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="Invert Image", command=self.invert_image).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="Undo Overlay", command=self.undo_overlay).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="Erase Region", command=self.erase_selected_region).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="Move Region", command=self.enter_move_mode).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="Set Region Threshold", command=self.open_region_threshold_editor).pack(side="left", padx=5)
 
         self.canvas.bind("<ButtonPress-1>", self.on_mouse_down)
         self.canvas.bind("<ButtonRelease-1>", self.on_mouse_up)
 
         self.orig_image = None
+        self.gray_image = None
+        self.binary_image = None
+        self.undo_stack = []
         self.tk_img = None
         self.is_inverted = False
-        self.scale = 1.0
-        self.load_image()
+        self.move_mode = False
+        self.move_start_box = None
 
-    def invert_image(self):
-        self.is_inverted = not self.is_inverted
-        self.update_threshold(self.slider.get())
+        self.load_image()
+        self.slider.configure(command=self.update_threshold)
 
     def load_image(self):
         selected_boxes.clear()
         path = filedialog.askopenfilename(filetypes=[("Images", "*.png;*.jpg;*.jpeg")])
         if not path:
             self.root.quit()
-        self.orig_image = cv2.imread(path)
+
+        use_portrait = messagebox.askyesno("Paper Orientation", "Use portrait orientation (A4 210×297mm)?")
+
+        if use_portrait:
+            self.a4_width = 2480
+            self.a4_height = 3508
+        else:
+            self.a4_width = 3508
+            self.a4_height = 2480
+
+        self.canvas_width = int(self.a4_width * self.preview_scale)
+        self.canvas_height = int(self.a4_height * self.preview_scale)
+        self.canvas.config(width=self.canvas_width, height=self.canvas_height)
+
+        img = cv2.imread(path)
+        self.orig_image = img
         self.gray_image = cv2.cvtColor(self.orig_image, cv2.COLOR_BGR2GRAY)
-        self.is_inverted = False  # Reset inversion on new image load
-        self.binary_image = None
         self.update_threshold(self.slider.get())
 
     def update_threshold(self, value):
-        if not hasattr(self, 'gray_image') or self.gray_image is None:
+        if self.gray_image is None:
             return
-        thresh_val = int(value)
         img = self.gray_image
         if self.is_inverted:
             img = cv2.bitwise_not(img)
-        _, thresh = cv2.threshold(img, thresh_val, 255, cv2.THRESH_BINARY)
-        self.binary_image = thresh
-        self.show_image(thresh)
+        _, thresh = cv2.threshold(img, int(value), 255, cv2.THRESH_BINARY)
+        self.binary_image = self.embed_in_a4_canvas(thresh)
+        self.undo_stack.append(self.binary_image.copy())
+        self.show_image(self.binary_image)
+
+    def embed_in_a4_canvas(self, image):
+        h, w = image.shape
+        scale = min(self.a4_width / w, self.a4_height / h)
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+        resized = cv2.resize(image, (new_w, new_h))
+        a4 = np.full((self.a4_height, self.a4_width), 255, dtype=np.uint8)
+        pad_x = (self.a4_width - new_w) // 2
+        pad_y = (self.a4_height - new_h) // 2
+        a4[pad_y:pad_y+new_h, pad_x:pad_x+new_w] = resized
+        return a4
 
     def show_image(self, image):
-        # Always draw from full resolution but show scaled preview (fit-to-screen)
-        h, w = image.shape
-        screen_h = self.root.winfo_screenheight() - 200
-        screen_w = self.root.winfo_screenwidth() - 100
-        self.scale = min(screen_w / w, screen_h / h, 1.0)
-
-        disp_img = cv2.resize(image, (int(w * self.scale), int(h * self.scale)))
-        rgb = cv2.cvtColor(disp_img, cv2.COLOR_GRAY2RGB)
+        preview = cv2.resize(image, (self.canvas_width, self.canvas_height))
+        rgb = cv2.cvtColor(preview, cv2.COLOR_GRAY2RGB)
         pil_img = Image.fromarray(rgb)
         self.tk_img = ImageTk.PhotoImage(pil_img)
-
         self.canvas.delete("all")
-        self.canvas.create_image((screen_w - disp_img.shape[1]) // 2, (screen_h - disp_img.shape[0]) // 2,
-                                 image=self.tk_img, anchor="nw", tags="img")
-        self.canvas.config(scrollregion=self.canvas.bbox("all"))
-
-    def set_region_threshold(self):
-        if not selected_boxes:
-            messagebox.showinfo("Info", "No region selected. Draw a box first.")
-            return
-        # Use the last selected box
-        x1, y1, x2, y2 = selected_boxes[-1]
-        thresh_val = tk.simpledialog.askinteger("Region Threshold", "Enter threshold value (0-255):", minvalue=0, maxvalue=255)
-        if thresh_val is None:
-            return
-        # Apply threshold only to the selected region
-        region = self.gray_image[y1:y2, x1:x2]
-        _, region_thresh = cv2.threshold(region, thresh_val, 255, cv2.THRESH_BINARY)
-        # Update the binary image only in the region
-        self.binary_image[y1:y2, x1:x2] = region_thresh
-        self.show_image(self.binary_image)
+        self.canvas.create_image(0, 0, image=self.tk_img, anchor="nw")
 
     def on_mouse_down(self, event):
         global ix, iy, drawing
         drawing = True
-        # Calculate offset due to centering
-        screen_h = self.root.winfo_screenheight() - 200
-        screen_w = self.root.winfo_screenwidth() - 100
-        h, w = self.binary_image.shape
-        disp_w, disp_h = int(w * self.scale), int(h * self.scale)
-        offset_x = (screen_w - disp_w) // 2
-        offset_y = (screen_h - disp_h) // 2
-        ix = self.canvas.canvasx(event.x) - offset_x
-        iy = self.canvas.canvasy(event.y) - offset_y
+        ix = int(self.canvas.canvasx(event.x) / self.preview_scale)
+        iy = int(self.canvas.canvasy(event.y) / self.preview_scale)
 
     def on_mouse_up(self, event):
         global drawing
+        ex = int(self.canvas.canvasx(event.x) / self.preview_scale)
+        ey = int(self.canvas.canvasy(event.y) / self.preview_scale)
+
+        if self.move_mode and self.move_start_box:
+            self.move_region(self.move_start_box, (ex, ey))
+            self.move_mode = False
+            self.move_start_box = None
+            selected_boxes.clear()
+            return
+
         if drawing:
             drawing = False
-            screen_h = self.root.winfo_screenheight() - 200
-            screen_w = self.root.winfo_screenwidth() - 100
-            h, w = self.binary_image.shape
-            disp_w, disp_h = int(w * self.scale), int(h * self.scale)
-            offset_x = (screen_w - disp_w) // 2
-            offset_y = (screen_h - disp_h) // 2
-            ex = self.canvas.canvasx(event.x) - offset_x
-            ey = self.canvas.canvasy(event.y) - offset_y
-            # Only allow coordinates inside the displayed image
-            ex = min(max(ex, 0), disp_w)
-            ey = min(max(ey, 0), disp_h)
-            ix_clamped = min(max(ix, 0), disp_w)
-            iy_clamped = min(max(iy, 0), disp_h)
-            x1, y1 = int(ix_clamped / self.scale), int(iy_clamped / self.scale)
-            x2, y2 = int(ex / self.scale), int(ey / self.scale)
-            print(f"Raw coords: ix={ix}, iy={iy}, ex={ex}, ey={ey}")
-            print(f"Image coords: x1={x1}, y1={y1}, x2={x2}, y2={y2}")
-            selected_boxes.append((min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)))
-            print("Selected boxes:", selected_boxes)
-            self.canvas.create_rectangle(ix + offset_x, iy + offset_y, ex + offset_x, ey + offset_y, outline="lime", width=2)
+            x1, y1 = min(ix, ex), min(iy, ey)
+            x2, y2 = max(ix, ex), max(iy, ey)
+            selected_boxes.append((x1, y1, x2, y2))
+            self.canvas.create_rectangle(x1 * self.preview_scale, y1 * self.preview_scale,
+                                        x2 * self.preview_scale, y2 * self.preview_scale,
+                                        outline="lime", width=2)
+
+    def invert_image(self):
+        self.is_inverted = not self.is_inverted
+        self.update_threshold(self.slider.get())
 
     def extract_text_and_braille(self):
-        braille_output = []
+        results = []
         for (x1, y1, x2, y2) in selected_boxes:
-            # Ensure coordinates are within image bounds and region is valid
-            x1, y1 = max(0, x1), max(0, y1)
-            x2, y2 = min(self.binary_image.shape[1], x2), min(self.binary_image.shape[0], y2)
-            if x2 <= x1 or y2 <= y1:
-                print(f"Invalid box: {(x1, y1, x2, y2)}")
-                continue
             roi = self.binary_image[y1:y2, x1:x2]
-            print("ROI shape:", roi.shape, "ROI dtype:", roi.dtype)
-            if roi.size == 0:
-                continue  # Skip invalid regions
-            text = pytesseract.image_to_string(roi, config="--psm 6").strip()
-            print("OCR text:", repr(text))
-            braille = '\n'.join(
-                ''.join([char_to_braille(c) for c in line])
-                for line in text.splitlines()
-            )
-            braille_output.append((text, braille))
-        return braille_output
+            text = pytesseract.image_to_string(roi, config="--psm 6")
+
+            # Split and strip each line of OCR text
+            text_lines = [line.strip() for line in text.splitlines() if line.strip()]
+
+            # Convert to Braille (strip text line first to prevent trailing braille space)
+            braille_lines = []
+            for line in text_lines:
+                braille_line = ''.join([char_to_braille(c) for c in line])
+                braille_lines.append(braille_line)
+
+            # Final Braille text
+            braille_text = '\n'.join(braille_lines).strip()
+
+            # Debug print
+            print(f"[BRAILLE DEBUG]\nRaw Text: {repr(text)}\nBraille: {repr(braille_text)}\n{'-'*40}")
+
+            results.append((x1, y1, x2, y2, text, braille_text))
+        return results
 
     def preview_braille_text(self):
-        if not selected_boxes:
-            messagebox.showinfo("Info", "No boxes selected.")
+        results = self.extract_text_and_braille()
+        if not results:
             return
-        text_pairs = self.extract_text_and_braille()
-        print("Extracted text and braille:", text_pairs)
-        preview = "\n\n".join([
-            f"Box: {box}\nText: {t}\nBraille: {b}"
-            for box, (t, b) in zip(selected_boxes, text_pairs)
-        ])
+        win = tk.Toplevel(self.root)
+        win.title("Braille Preview")
+        text_box = tk.Text(win, wrap="word")
+        for (x1, y1, x2, y2, text, braille) in results:
+            text_box.insert("end", f"Box: {(x1, y1, x2, y2)}\nText: {text}\nBraille: {braille}\n\n")
+        text_box.pack(fill="both", expand=True)
 
-        preview_window = tk.Toplevel(self.root)
-        preview_window.title("Braille Preview")
-        preview_window.geometry("500x300")
-
-        btn_frame = tk.Frame(preview_window)
-        btn_frame.pack(fill="x", pady=5, side="top")
-
-        text_box = tk.Text(preview_window, wrap="word")
-        text_box.insert("1.0", preview)
-        text_box.pack(expand=True, fill="both")
-
-        def replace_with_braille():
+        def apply():
             edited = text_box.get("1.0", "end").strip()
-            blocks = [block.strip() for block in edited.split("\n\n") if block.strip()]
-            new_pairs = []
-            for block in blocks:
-                lines = block.splitlines()
-                box_line = next((line for line in lines if line.startswith("Box: ")), None)
-                text_line = next((line for line in lines if line.startswith("Text: ")), None)
-                braille_start = None
-                for idx, line in enumerate(lines):
-                    if line.startswith("Braille: "):
-                        braille_start = idx
-                        break
-                if box_line and text_line and braille_start is not None:
-                    box_str = box_line[len("Box: "):].strip()
-                    box = tuple(map(int, box_str.strip("()").split(",")))
-                    text = text_line[len("Text: "):]
-                    # Get all lines after "Braille: ", including the first line after the prefix
-                    braille_lines = [lines[braille_start][len("Braille: "):]] + lines[braille_start+1:]
-                    braille_lines = [line.strip() for line in braille_lines]
-                    braille = "\n".join(braille_lines)
-                    new_pairs.append((box, (text, braille)))
-            # Overlay using the edited Braille text and the correct boxes
-            self.overlay_braille_on_image(new_pairs)
-            # Optionally, update selected_boxes to match the new set:
-            global selected_boxes
-            selected_boxes = [box for box, _ in new_pairs]
-            preview_window.destroy()
+            lines = edited.splitlines()
 
-        replace_btn = tk.Button(btn_frame, text="Replace Box with Braille", command=replace_with_braille)
-        replace_btn.pack(pady=5)
+            pairs = []
+            current_box = None
+            braille_lines = []
+            reading_braille = False
 
-    def overlay_braille_on_image(self, text_pairs):
-        img = self.binary_image.copy()
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-        pil_img = Image.fromarray(img_rgb)
+            for line in lines:
+                stripped = line.strip()
 
-        font_path = "DejaVuSans-Bold.ttf"
-        try:
-            base_font = ImageFont.truetype(font_path, 40)
-        except Exception as e:
-            print("Font load error:", e)
-            base_font = ImageFont.load_default()
+                if stripped.startswith("Box:"):
+                    if current_box and braille_lines:
+                        braille_text = "\n".join(braille_lines).strip()
+                        print(f"\n[Overlaying Braille]\nBox: {current_box}\nBraille:\n{braille_text}\n{'-'*40}")
+                        pairs.append((current_box, braille_text))
+                    try:
+                        box_str = stripped[5:].strip()
+                        current_box = tuple(map(int, box_str.strip("()").split(",")))
+                    except:
+                        current_box = None
+                    braille_lines = []
+                    reading_braille = False
 
+                elif stripped.lower().startswith("braille:"):
+                    reading_braille = True
+                    braille_line = line.partition("Braille:")[2].strip()
+                    if braille_line:
+                        braille_lines.append(braille_line)
+
+                elif stripped.lower().startswith("text:"):
+                    continue
+
+                elif reading_braille and current_box:
+                    braille_lines.append(line)
+
+            if current_box and braille_lines:
+                braille_text = "\n".join(braille_lines).strip()
+                print(f"\n[Overlaying Braille]\nBox: {current_box}\nBraille:\n{braille_text}\n{'-'*40}")
+                pairs.append((current_box, braille_text))
+
+            self.overlay_braille_on_image(pairs)
+
+            # 🔻 Clear bounding boxes after applying
+            selected_boxes.clear()
+            self.canvas.delete("all")
+            self.show_image(self.binary_image)
+
+            win.destroy()
+
+        tk.Button(win, text="Apply to Canvas", command=apply).pack(pady=5)
+
+    def overlay_braille_on_image(self, pairs):
+        self.undo_stack.append(self.binary_image.copy())
+        img = cv2.cvtColor(self.binary_image, cv2.COLOR_GRAY2RGB)
+        pil_img = Image.fromarray(img)
         draw = ImageDraw.Draw(pil_img)
 
-        def wrap_braille_lines(braille, font, max_width):
-            # Split the braille text into lines using \n, then wrap each line by width
-            user_lines = braille.split('\n')
-            lines = []
-            for user_line in user_lines:
-                words = [w for w in user_line.split(' ') if w.strip() != '']
-                current = ""
-                for word in words:
-                    test = (current + ' ' + word).strip() if current else word
-                    bbox = draw.textbbox((0, 0), test, font=font)
-                    w = bbox[2] - bbox[0]
-                    if w > max_width and current:
-                        lines.append(current)
-                        current = word
-                    else:
-                        current = test
-                if current or not words:  # preserve empty lines
-                    lines.append(current)
-            return lines
+        font_path = BRAILLE_FONT
+        font_size = BRAILLE_FONT_SIZE
+        try:
+            font = ImageFont.truetype(font_path, font_size)
+        except:
+            font = ImageFont.load_default()
 
-        for (x1, y1, x2, y2), (text, braille) in text_pairs:
-            draw.rectangle([x1, y1, x2, y2], fill=(255, 255, 255))
-            box_w = x2 - x1
-            box_h = y2 - y1
+        line_spacing = 5
+        padding_x = BRAILLE_FONT_PADDING
+        padding_y = BRAILLE_FONT_PADDING
 
-            if braille:
-                best_font_size = 10
-                best_lines = [braille]
-                for size in range(10, 200):
-                    try:
-                        test_font = ImageFont.truetype(font_path, size)
-                    except Exception:
-                        test_font = base_font
-                    lines = wrap_braille_lines(braille, test_font, box_w)
-                    line_heights = [draw.textbbox((0, 0), line, font=test_font)[3] - draw.textbbox((0, 0), line, font=test_font)[1] for line in lines]
-                    total_height = sum(line_heights) + (len(lines) - 1) * 4
-                    if total_height > box_h:
-                        break
-                    if any(draw.textbbox((0, 0), line, font=test_font)[2] - draw.textbbox((0, 0), line, font=test_font)[0] > box_w for line in lines):
-                        break
-                    best_font_size = size
-                    best_lines = lines
+        for (x1, y1, x2, y2), braille in pairs:
+            # Strip leading/trailing whitespace from block and lines
+            stripped_lines = [line.strip() for line in braille.strip().splitlines() if line.strip()]
+            y = y1
 
-                try:
-                    font = ImageFont.truetype(font_path, best_font_size)
-                except Exception:
-                    font = base_font
+            for line in stripped_lines:
+                bbox = font.getbbox(line)
+                text_width = bbox[2] - bbox[0]
+                text_height = bbox[3] - bbox[1]
 
-                line_heights = [draw.textbbox((0, 0), line, font=font)[3] - draw.textbbox((0, 0), line, font=font)[1] for line in best_lines]
-                total_height = sum(line_heights) + (len(best_lines) - 1) * 4
-                y = y1 + (box_h - total_height) // 2
+                bg_x1 = x1 - padding_x
+                bg_y1 = y - padding_y
+                bg_x2 = x1 + text_width + padding_x
+                bg_y2 = y + text_height + padding_y
 
-                for line in best_lines:
-                    if line:
-                        bbox = draw.textbbox((0, 0), line, font=font)
-                        w = bbox[2] - bbox[0]
-                        h = bbox[3] - bbox[1]
-                        x = x1 + (box_w - w) // 2
-                        draw.text((x, y), line, font=font, fill=(0, 0, 0))
-                    else:
-                        # For empty lines, estimate height using a typical character
-                        h = draw.textbbox((0, 0), "A", font=font)[3] - draw.textbbox((0, 0), "A", font=font)[1]
-                    y += h + 4
+                # Draw white rectangle background
+                draw.rectangle([bg_x1, bg_y1, bg_x2, bg_y2], fill="white")
 
-        img_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
-        self.show_image(img_bgr)
-        self.binary_image = img_bgr
+                # Draw cleaned Braille text
+                draw.text((x1, y), line, font=font, fill="black")
+
+                y += text_height + line_spacing
+
+        self.binary_image = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
+        self.show_image(self.binary_image)
+
+    def undo_overlay(self):
+        if selected_boxes:
+            selected_boxes.clear()
+            self.show_image(self.binary_image)
+            messagebox.showinfo("Undo", "Selection cleared.")
+            return
+
+        if self.undo_stack:
+            self.binary_image = self.undo_stack.pop()
+            self.show_image(self.binary_image)
+            messagebox.showinfo("Undo", "Undid last operation.")
+        else:
+            messagebox.showinfo("Undo", "No more actions to undo.")
+
+    def erase_selected_region(self):
+        if not selected_boxes:
+            messagebox.showinfo("Erase", "No selected region to erase.")
+            return
+
+        self.undo_stack.append(self.binary_image.copy())
+        for (x1, y1, x2, y2) in selected_boxes:
+            cv2.rectangle(self.binary_image, (x1, y1), (x2, y2), color=255, thickness=-1)  # White fill
+
+        selected_boxes.clear()
+        self.show_image(self.binary_image)
+        messagebox.showinfo("Erase", "Selected region erased.")
+
+    def enter_move_mode(self):
+        if len(selected_boxes) != 1:
+            messagebox.showinfo("Move", "Please select one region to move.")
+            return
+        self.move_mode = True
+        self.move_start_box = selected_boxes[0]
+        messagebox.showinfo("Move", "Now click where you want to move the selected region.")
+
+    def move_region(self, box, new_point):
+        self.undo_stack.append(self.binary_image.copy())
+
+        x1, y1, x2, y2 = box
+        roi = self.binary_image[y1:y2, x1:x2].copy()
+        w, h = x2 - x1, y2 - y1
+
+        # Erase original
+        cv2.rectangle(self.binary_image, (x1, y1), (x2, y2), color=255, thickness=-1)
+
+        # Compute new top-left
+        new_x1 = new_point[0]
+        new_y1 = new_point[1]
+        new_x2 = new_x1 + w
+        new_y2 = new_y1 + h
+
+        # Bounds check
+        if new_x2 > self.binary_image.shape[1] or new_y2 > self.binary_image.shape[0]:
+            messagebox.showwarning("Move", "Move exceeds image bounds.")
+            return
+
+        # Paste to new position
+        self.binary_image[new_y1:new_y2, new_x1:new_x2] = roi
+        self.show_image(self.binary_image)
+
+    def open_region_threshold_editor(self):
+        RegionThresholdEditor(self)
+
 
     def save_braille_output(self):
-        # Convert binary image to BGR for colored overlay
-        output = cv2.cvtColor(self.binary_image, cv2.COLOR_GRAY2BGR)
-        for (x1, y1, x2, y2) in selected_boxes:
-            roi = self.binary_image[y1:y2, x1:x2]
-            text = pytesseract.image_to_string(roi, config="--psm 6").strip()
-            for idx, ch in enumerate(text):
-                braille_char = char_to_braille(ch)
-                # Draw Braille text in color (e.g., green) for visibility
-                cv2.putText(output, braille_char, (x1 + idx * 20, y1 + 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-
-        save_path = filedialog.asksaveasfilename(defaultextension=".png",
-                                                filetypes=[("PNG", "*.png")])
+        output = cv2.cvtColor(self.binary_image, cv2.COLOR_GRAY2RGB)
+        save_path = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG", "*.png")])
         if save_path:
-            cv2.imwrite(save_path, output)
+            Image.fromarray(output).save(save_path, dpi=(300, 300))
             messagebox.showinfo("Success", f"Saved to: {save_path}")
 
 if __name__ == "__main__":
