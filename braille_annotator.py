@@ -14,7 +14,7 @@ ix, iy = -1, -1
 
 BRAILLE_FONT_SIZE = 100
 BRAILLE_FONT_PADDING = 25
-BRAILLE_FONT = "DejaVuSans-Bold.ttf"
+BRAILLE_FONT = "DejaVuSans.ttf"
 
 def char_to_braille(c):
     BRAILLE_BASE = 0x2800
