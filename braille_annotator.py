@@ -440,10 +440,10 @@ class BrailleOCRApp:
                     fill="black", outline="black"
                 )
 
-    def undo_overlay(self):
+    # def undo_overlay(self):
 
-        self.binary_image = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
-        self.show_image(self.binary_image)
+    #     self.binary_image = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
+    #     self.show_image(self.binary_image)
 
     def undo_overlay(self):
         if selected_boxes:
@@ -453,8 +453,9 @@ class BrailleOCRApp:
             return
 
         if len(self.undo_stack) > 1:
-            self.undo_stack.pop() # Pop current state
-            self.binary_image = self.undo_stack[-1] # Restore previous state
+            # self.undo_stack.pop() # Pop current state
+            # self.binary_image = self.undo_stack[-1] # Restore previous state
+            self.binary_image = self.undo_stack.pop()
             self.show_image(self.binary_image)
             messagebox.showinfo("Undo", "Last annotation undone.")
         else:
