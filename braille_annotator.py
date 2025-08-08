@@ -17,6 +17,27 @@ BRAILLE_CELL_HEIGHT = 20*scale
 BRAILLE_DOT_RADIUS = 2*scale
 BRAILLE_DOT_PADDING = 1*scale
 
+# def char_to_braille(text):
+#     BRAILLE_BASE = 0x2800
+#     braille_map = {
+#         'a': 0x01, 'b': 0x03, 'c': 0x09, 'd': 0x19, 'e': 0x11, 'f': 0x0B, 'g': 0x1B, 'h': 0x13, 'i': 0x0A, 'j': 0x1A,
+#         'k': 0x05, 'l': 0x07, 'm': 0x0D, 'n': 0x1D, 'o': 0x15, 'p': 0x0F, 'q': 0x1F, 'r': 0x17, 's': 0x0E, 't': 0x1E,
+#         'u': 0x25, 'v': 0x27, 'w': 0x3A, 'x': 0x2D, 'y': 0x3D, 'z': 0x35,
+#         '1': 0x01, '2': 0x03, '3': 0x09, '4': 0x19, '5': 0x11, '6': 0x0B, '7': 0x1B, '8': 0x13, '9': 0x0A, '0': 0x1A,
+#         '.': 0x32, ',': 0x02, ';': 0x06, ':': 0x12, '?': 0x26, '!': 0x16, '(': 0x36, ')': 0x36, '-': 0x24,
+#         ' ': 0x00
+#     }
+    
+#     result = ""
+#     for char in text:
+#         if char.isalpha():  # Only process alphabet characters
+#             if char.isupper():
+#                 result += chr(BRAILLE_BASE + 0x20)  # Capital sign
+#                 char = char.lower()
+#             result += chr(BRAILLE_BASE + braille_map.get(char, 0x00))
+        
+#     return result
+
 def char_to_braille(text):
     BRAILLE_BASE = 0x2800
     braille_map = {
@@ -29,12 +50,19 @@ def char_to_braille(text):
     }
     
     result = ""
+    capitalize_next = False
+    
     for char in text:
-        if char.isalpha():  # Only process alphabet characters
-            if char.isupper():
-                result += chr(BRAILLE_BASE + 0x20)  # Capital sign
-                char = char.lower()
-            result += chr(BRAILLE_BASE + braille_map.get(char, 0x00))
+        if char.isupper():
+            if not capitalize_next and (len(result) == 0 or result[-1] == chr(BRAILLE_BASE + braille_map.get(' '))) :
+                result += chr(BRAILLE_BASE + 0x20) # Capital sign
+            capitalize_next = True
+            char = char.lower()
+        else:
+            capitalize_next = False
+            
+        if char in braille_map:
+            result += chr(BRAILLE_BASE + braille_map[char])
         
     return result
 
