@@ -4,7 +4,7 @@ import pytesseract
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
 from PIL import Image, ImageTk, ImageDraw, ImageFont
-from region_threshold_editor import RegionThresholdEditor
+from region_threshold_editor import RegionThresholdEditor # Assuming this file exists in the same directory
 
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
@@ -16,27 +16,6 @@ BRAILLE_CELL_WIDTH = 11*scale
 BRAILLE_CELL_HEIGHT = 20*scale
 BRAILLE_DOT_RADIUS = 2*scale
 BRAILLE_DOT_PADDING = 1*scale
-
-# def char_to_braille(text):
-#     BRAILLE_BASE = 0x2800
-#     braille_map = {
-#         'a': 0x01, 'b': 0x03, 'c': 0x09, 'd': 0x19, 'e': 0x11, 'f': 0x0B, 'g': 0x1B, 'h': 0x13, 'i': 0x0A, 'j': 0x1A,
-#         'k': 0x05, 'l': 0x07, 'm': 0x0D, 'n': 0x1D, 'o': 0x15, 'p': 0x0F, 'q': 0x1F, 'r': 0x17, 's': 0x0E, 't': 0x1E,
-#         'u': 0x25, 'v': 0x27, 'w': 0x3A, 'x': 0x2D, 'y': 0x3D, 'z': 0x35,
-#         '1': 0x01, '2': 0x03, '3': 0x09, '4': 0x19, '5': 0x11, '6': 0x0B, '7': 0x1B, '8': 0x13, '9': 0x0A, '0': 0x1A,
-#         '.': 0x32, ',': 0x02, ';': 0x06, ':': 0x12, '?': 0x26, '!': 0x16, '(': 0x36, ')': 0x36, '-': 0x24,
-#         ' ': 0x00
-#     }
-    
-#     result = ""
-#     for char in text:
-#         if char.isalpha():  # Only process alphabet characters
-#             if char.isupper():
-#                 result += chr(BRAILLE_BASE + 0x20)  # Capital sign
-#                 char = char.lower()
-#             result += chr(BRAILLE_BASE + braille_map.get(char, 0x00))
-        
-#     return result
 
 def char_to_braille(text):
     BRAILLE_BASE = 0x2800
@@ -54,7 +33,7 @@ def char_to_braille(text):
     
     for char in text:
         if char.isupper():
-            if not capitalize_next and (len(result) == 0 or result[-1] == chr(BRAILLE_BASE + braille_map.get(' '))) :
+            if not capitalize_next and (len(result) == 0 or result[-1] == chr(BRAILLE_BASE + braille_map.get(' '))):
                 result += chr(BRAILLE_BASE + 0x20) # Capital sign
             capitalize_next = True
             char = char.lower()
@@ -114,6 +93,10 @@ class BrailleOCRApp:
 
         self.canvas.bind("<ButtonPress-1>", self.on_mouse_down)
         self.canvas.bind("<ButtonRelease-1>", self.on_mouse_up)
+        # Bind mouse wheel for zooming
+        self.root.bind("<MouseWheel>", self.do_zoom)
+        self.root.bind("<Button-4>", self.do_zoom) # For Linux
+        self.root.bind("<Button-5>", self.do_zoom) # For Linux
 
         self.orig_image = None
         self.gray_image = None
@@ -123,6 +106,7 @@ class BrailleOCRApp:
         self.is_inverted = False
         self.move_mode = False
         self.move_start_box = None
+        self.zoom_level = 1.0
 
         self.load_image()
         self.slider.configure(command=self.update_threshold)
@@ -135,7 +119,11 @@ class BrailleOCRApp:
             img = cv2.bitwise_not(img)
         _, thresh = cv2.threshold(img, int(value), 255, cv2.THRESH_BINARY)
         self.binary_image = self.embed_in_a4_canvas(thresh)
-        self.undo_stack.append(self.binary_image.copy())
+        
+        # Only append to undo stack if it's a new state, not just a slider update
+        if not self.undo_stack or not np.array_equal(self.undo_stack[-1], self.binary_image):
+            self.undo_stack.append(self.binary_image.copy())
+
         self.show_image(self.binary_image)
 
     def embed_in_a4_canvas(self, image):
@@ -158,7 +146,7 @@ class BrailleOCRApp:
                 self.root.quit()
             return
 
-        use_portrait = messagebox.askyesno("Paper Orientation", "Use portrait orientation (A4 210×297mm)?")
+        use_portrait = messagebox.askyesno("Paper Orientation", "Use portrait orientation (A4 210x297mm)?")
 
         if use_portrait:
             self.a4_width = 2480
@@ -176,47 +164,49 @@ class BrailleOCRApp:
         self.gray_image = cv2.cvtColor(self.orig_image, cv2.COLOR_BGR2GRAY)
         self.update_threshold(self.slider.get())
 
-    def update_threshold(self, value):
-        if self.gray_image is None:
-            return
-        img = self.gray_image
-        if self.is_inverted:
-            img = cv2.bitwise_not(img)
-        _, thresh = cv2.threshold(img, int(value), 255, cv2.THRESH_BINARY)
-        self.binary_image = self.embed_in_a4_canvas(thresh)
-        self.undo_stack.append(self.binary_image.copy())
-        self.show_image(self.binary_image)
-
-    def embed_in_a4_canvas(self, image):
-        h, w = image.shape
-        scale = min(self.a4_width / w, self.a4_height / h)
-        new_w = int(w * scale)
-        new_h = int(h * scale)
-        resized = cv2.resize(image, (new_w, new_h))
-        a4 = np.full((self.a4_height, self.a4_width), 255, dtype=np.uint8)
-        pad_x = (self.a4_width - new_w) // 2
-        pad_y = (self.a4_height - new_h) // 2
-        a4[pad_y:pad_y+new_h, pad_x:pad_x+new_w] = resized
-        return a4
-
     def show_image(self, image):
-        preview = cv2.resize(image, (self.canvas_width, self.canvas_height))
+        # Resize image to match preview dimensions, applying the current zoom level
+        preview_width = int(self.canvas_width * self.zoom_level)
+        preview_height = int(self.canvas_height * self.zoom_level)
+        preview = cv2.resize(image, (preview_width, preview_height))
         rgb = cv2.cvtColor(preview, cv2.COLOR_GRAY2RGB)
+
+        # The border is for visualization only. It is drawn on the preview image
+        # and does not affect the underlying 'self.binary_image' data.
+        one_inch_dpi_300 = 300  # A reference value for 1 inch at 300 DPI
+        border_size_inches = 0.75 # The requested border size
+        border_px = int(border_size_inches * one_inch_dpi_300 * self.preview_scale * self.zoom_level)
+        h, w, _ = rgb.shape
+
+        if border_px * 2 < w and border_px * 2 < h:
+            cv2.rectangle(
+                rgb,
+                (border_px, border_px),
+                (w - border_px, h - border_px),
+                color=(0, 0, 255),  # Red in BGR
+                thickness=2,
+                lineType=cv2.LINE_AA
+            )
+
+        # Convert to PIL and display
         pil_img = Image.fromarray(rgb)
         self.tk_img = ImageTk.PhotoImage(pil_img)
+
         self.canvas.delete("all")
         self.canvas.create_image(0, 0, image=self.tk_img, anchor="nw")
 
     def on_mouse_down(self, event):
         global ix, iy, drawing
         drawing = True
-        ix = int(self.canvas.canvasx(event.x) / self.preview_scale)
-        iy = int(self.canvas.canvasy(event.y) / self.preview_scale)
+        # Scale coordinates to the full resolution image, ignoring the visual border
+        ix = int(self.canvas.canvasx(event.x) / (self.preview_scale * self.zoom_level))
+        iy = int(self.canvas.canvasy(event.y) / (self.preview_scale * self.zoom_level))
 
     def on_mouse_up(self, event):
         global drawing
-        ex = int(self.canvas.canvasx(event.x) / self.preview_scale)
-        ey = int(self.canvas.canvasy(event.y) / self.preview_scale)
+        # Scale coordinates to the full resolution image, ignoring the visual border
+        ex = int(self.canvas.canvasx(event.x) / (self.preview_scale * self.zoom_level))
+        ey = int(self.canvas.canvasy(event.y) / (self.preview_scale * self.zoom_level))
 
         if self.move_mode and self.move_start_box:
             self.move_region(self.move_start_box, (ex, ey))
@@ -230,13 +220,17 @@ class BrailleOCRApp:
             x1, y1 = min(ix, ex), min(iy, ey)
             x2, y2 = max(ix, ex), max(iy, ey)
             selected_boxes.append((x1, y1, x2, y2))
-            self.canvas.create_rectangle(x1 * self.preview_scale, y1 * self.preview_scale,
-                                        x2 * self.preview_scale, y2 * self.preview_scale,
-                                        outline="lime", width=2)
+            
+            # Draw the selection box on the canvas using the scaled coordinates
+            self.canvas.create_rectangle(x1 * self.preview_scale * self.zoom_level, 
+                                         y1 * self.preview_scale * self.zoom_level,
+                                         x2 * self.preview_scale * self.zoom_level, 
+                                         y2 * self.preview_scale * self.zoom_level,
+                                         outline="lime", width=2)
 
     def do_zoom(self, event):
         # Zoom in/out based on mouse wheel direction
-        if event.delta > 0: # Zoom in
+        if event.delta > 0 or event.num == 4: # Zoom in
             self.zoom_level *= 1.1
         else: # Zoom out
             self.zoom_level /= 1.1
@@ -246,91 +240,7 @@ class BrailleOCRApp:
 
         # Redraw the image with the new zoom level
         self.show_image(self.binary_image)
-
-    def load_image(self):
-        selected_boxes.clear()
-        path = filedialog.askopenfilename(filetypes=[("Images", "*.png;*.jpg;*.jpeg")])
-        if not path:
-            if self.orig_image is None: # Quit if no image was ever loaded
-                self.root.quit()
-            return
-
-        use_portrait = messagebox.askyesno("Paper Orientation", "Use portrait orientation (A4 210×297mm)?")
-
-        if use_portrait:
-            self.a4_width = 2480
-            self.a4_height = 3508
-        else:
-            self.a4_width = 3508
-            self.a4_height = 2480
-
-        self.canvas_width = int(self.a4_width * self.preview_scale)
-        self.canvas_height = int(self.a4_height * self.preview_scale)
-        self.canvas.config(width=self.canvas_width, height=self.canvas_height)
-
-        img = cv2.imread(path)
-        self.orig_image = img
-        self.gray_image = cv2.cvtColor(self.orig_image, cv2.COLOR_BGR2GRAY)
-        self.update_threshold(self.slider.get())
-
-    def update_threshold(self, value):
-        if self.gray_image is None:
-            return
-        img = self.gray_image
-        if self.is_inverted:
-            img = cv2.bitwise_not(img)
-        _, thresh = cv2.threshold(img, int(value), 255, cv2.THRESH_BINARY)
-        self.binary_image = self.embed_in_a4_canvas(thresh)
-        self.undo_stack.append(self.binary_image.copy())
-        self.show_image(self.binary_image)
-
-    def embed_in_a4_canvas(self, image):
-        h, w = image.shape
-        scale = min(self.a4_width / w, self.a4_height / h)
-        new_w = int(w * scale)
-        new_h = int(h * scale)
-        resized = cv2.resize(image, (new_w, new_h))
-        a4 = np.full((self.a4_height, self.a4_width), 255, dtype=np.uint8)
-        pad_x = (self.a4_width - new_w) // 2
-        pad_y = (self.a4_height - new_h) // 2
-        a4[pad_y:pad_y+new_h, pad_x:pad_x+new_w] = resized
-        return a4
-
-    def show_image(self, image):
-        preview = cv2.resize(image, (self.canvas_width, self.canvas_height))
-        rgb = cv2.cvtColor(preview, cv2.COLOR_GRAY2RGB)
-        pil_img = Image.fromarray(rgb)
-        self.tk_img = ImageTk.PhotoImage(pil_img)
-        self.canvas.delete("all")
-        self.canvas.create_image(0, 0, image=self.tk_img, anchor="nw")
-
-    def on_mouse_down(self, event):
-        global ix, iy, drawing
-        drawing = True
-        ix = int(self.canvas.canvasx(event.x) / self.preview_scale)
-        iy = int(self.canvas.canvasy(event.y) / self.preview_scale)
-
-    def on_mouse_up(self, event):
-        global drawing
-        ex = int(self.canvas.canvasx(event.x) / self.preview_scale)
-        ey = int(self.canvas.canvasy(event.y) / self.preview_scale)
-
-        if self.move_mode and self.move_start_box:
-            self.move_region(self.move_start_box, (ex, ey))
-            self.move_mode = False
-            self.move_start_box = None
-            selected_boxes.clear()
-            return
-
-        if drawing:
-            drawing = False
-            x1, y1 = min(ix, ex), min(iy, ey)
-            x2, y2 = max(ix, ex), max(iy, ey)
-            selected_boxes.append((x1, y1, x2, y2))
-            self.canvas.create_rectangle(x1 * self.preview_scale, y1 * self.preview_scale,
-                                        x2 * self.preview_scale, y2 * self.preview_scale,
-                                        outline="lime", width=2)
-
+    
     def invert_image(self):
         self.is_inverted = not self.is_inverted
         self.update_threshold(self.slider.get())
@@ -338,6 +248,7 @@ class BrailleOCRApp:
     def extract_text_and_braille(self):
         results = []
         for (x1, y1, x2, y2) in selected_boxes:
+            # All image processing functions operate on the full resolution image data
             roi = self.binary_image[y1:y2, x1:x2]
             text = pytesseract.image_to_string(roi, config="--psm 6")
 
@@ -386,7 +297,7 @@ class BrailleOCRApp:
                         pairs.append((current_box, braille_text))
                     try:
                         box_str = stripped[5:].strip()
-                        current_box = tuple(map(int, box_str.strip("()",).split(",")))
+                        current_box = tuple(map(int, box_str.strip("()").split(",")))
                     except:
                         current_box = None
                     braille_lines = []
@@ -468,11 +379,6 @@ class BrailleOCRApp:
                     fill="black", outline="black"
                 )
 
-    # def undo_overlay(self):
-
-    #     self.binary_image = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
-    #     self.show_image(self.binary_image)
-
     def undo_overlay(self):
         if selected_boxes:
             selected_boxes.clear()
@@ -481,8 +387,6 @@ class BrailleOCRApp:
             return
 
         if len(self.undo_stack) > 1:
-            # self.undo_stack.pop() # Pop current state
-            # self.binary_image = self.undo_stack[-1] # Restore previous state
             self.binary_image = self.undo_stack.pop()
             self.show_image(self.binary_image)
             messagebox.showinfo("Undo", "Last annotation undone.")
@@ -547,6 +451,7 @@ class BrailleOCRApp:
         output = cv2.cvtColor(self.binary_image, cv2.COLOR_GRAY2RGB)
         save_path = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG", "*.png")])
         if save_path:
+            # The border is not part of the self.binary_image, so it is not saved
             Image.fromarray(output).save(save_path, dpi=(300, 300))
             messagebox.showinfo("Success", f"Saved to: {save_path}")
 
@@ -554,3 +459,4 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = BrailleOCRApp(root)
     root.mainloop()
+
